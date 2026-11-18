@@ -1,0 +1,245 @@
+@page "/settings"
+@using Photino.Blazor
+@using Virtualized.Qemu
+@using Virtualized.Settings
+@implements IDisposable
+@inject QemuEnvironment QemuEnvironment
+@inject SettingsStore SettingsStore
+@inject PhotinoBlazorApp App
+
+<PageTitle>Settings</PageTitle>
+
+<div class="settings-page">
+    <CbText Typo="Typo.H5">Settings</CbText>
+
+    <CbCard Outlined="true">
+        <CbCardHeader Title="QEMU installation" Subtitle="Virtualized uses the QEMU already installed on this computer." />
+        <CbCardContent>
+            <CbStack Spacing="3">
+                <CbStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <CbTextField @bind-Value="_qemuDirectory" Label="QEMU folder" Placeholder="Detect automatically"
+                                 HelperText="Folder containing qemu-system-x86_64. Leave empty to detect it automatically."
+                                 Clearable="true" Style="flex: 1" />
+                    <CbButton Variant="Variant.Outlined" StartIcon="folder_open" OnClick="_BrowseAsync">Browse</CbButton>
+                    <CbButton Variant="Variant.Filled" StartIcon="search" OnClick="_SaveAndDetectAsync"
+                              Loading="QemuEnvironment.IsDetecting">Save and detect</CbButton>
+                </CbStack>
+
+                @if (QemuEnvironment.IsDetecting && Detection is null)
+                {
+                    <CbProgressLinear Indeterminate="true" />
+                }
+                else if (Installation is { } qemu)
+                {
+                    <CbAlert Severity="Severity.Success" Title="@($"QEMU {qemu.Version}")">@qemu.Directory</CbAlert>
+                    @if (!qemu.IsVersionSupported)
+                    {
+                        <CbAlert Severity="Severity.Warning" Title="Unsupported version">
+                            Virtualized needs QEMU @QemuInstallation.MinimumVersion or later. Some features may not work.
+                        </CbAlert>
+                    }
+                    @if (qemu.QemuImgPath is null)
+                    {
+                        <CbAlert Severity="Severity.Warning" Title="qemu-img not found">
+                            New disks can't be created without qemu-img, which normally ships next to QEMU.
+                        </CbAlert>
+                    }
+                }
+                else if (Detection is not null)
+                {
+                    <CbAlert Severity="Severity.Error" Title="QEMU not found">
+                        @if (Detection.Error is not null)
+                        {
+                            <div>@Detection.Error</div>
+                        }
+                        else if (SettingsStore.Current.QemuDirectory is { } configured)
+                        {
+                            <div>There's no qemu-system-x86_64 or qemu-system-aarch64 in @configured. Pick another folder or clear the field to detect QEMU automatically.</div>
+                        }
+                        else
+                        {
+                            <div>@_InstallHint</div>
+                            <details class="settings-searched">
+                                <summary>Searched @Detection.SearchedDirectories.Count @(Detection.SearchedDirectories.Count == 1 ? "folder" : "folders")</summary>
+                                @foreach (var directory in Detection.SearchedDirectories)
+                                {
+                                    <div class="settings-path">@directory</div>
+                                }
+                            </details>
+                        }
+                    </CbAlert>
+                }
+            </CbStack>
+        </CbCardContent>
+    </CbCard>
+
+    @if (Installation is { } installation)
+    {
+        <CbCard Outlined="true">
+            <CbCardHeader Title="Emulators and acceleration" />
+            <CbCardContent>
+                <CbStack Spacing="3">
+                    @foreach (var binary in installation.Binaries)
+                    {
+                        <div>
+                            <CbText Typo="Typo.Subtitle2">@binary.Architecture guests</CbText>
+                            <div class="settings-path">@binary.Path</div>
+                            <CbStack Row="true" Spacing="1" Wrap="true" Class="mt-1">
+                                @foreach (var accelerator in binary.Accelerators)
+                                {
+                                    <CbChip Size="Size.Small"
+                                            Text="@($"{accelerator.Name}{(accelerator.Name == binary.BestAccelerator ? " · in use" : "")}")"
+                                            Color="@(accelerator.Usable ? Color.Success : Color.Default)"
+                                            Variant="@(accelerator.Usable ? Variant.Tonal : Variant.Outlined)"
+                                            Icon="@(accelerator.Usable ? "check" : "block")" />
+                                }
+                            </CbStack>
+                            @if (!binary.HasHardwareAcceleration)
+                            {
+                                <CbAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
+                                    No hardware acceleration for @binary.Architecture: these VMs will run in software emulation and be slow. @_AccelerationHint(binary)
+                                </CbAlert>
+                            }
+                        </div>
+                    }
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+
+        <CbCard Outlined="true">
+            <CbCardHeader Title="UEFI firmware" />
+            <CbCardContent>
+                @if (installation.Firmware.Count == 0)
+                {
+                    <CbAlert Severity="Severity.Info">No UEFI firmware found. VMs can still boot with the legacy BIOS.</CbAlert>
+                }
+                else
+                {
+                    <CbStack Spacing="2">
+                        @foreach (var firmware in installation.Firmware)
+                        {
+                            <div>
+                                <CbStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Wrap="true">
+                                    <CbText Typo="Typo.Body2">@firmware.Description</CbText>
+                                    <CbChip Size="Size.Small" Variant="Variant.Outlined" Text="@firmware.Architecture" />
+                                    @if (firmware.SecureBoot)
+                                    {
+                                        <CbChip Size="Size.Small" Variant="Variant.Tonal" Color="Color.Info" Icon="verified_user" Text="Secure Boot" />
+                                    }
+                                    @if (firmware.RequiresSmm)
+                                    {
+                                        <CbChip Size="Size.Small" Variant="Variant.Outlined" Text="Requires SMM" />
+                                    }
+                                </CbStack>
+                                <div class="settings-path">@firmware.CodePath</div>
+                            </div>
+                        }
+                    </CbStack>
+                }
+            </CbCardContent>
+        </CbCard>
+
+        <CbCard Outlined="true">
+            <CbCardHeader Title="TPM and Secure Boot" />
+            <CbCardContent>
+                <CbStack Spacing="2">
+                    @if (installation.TpmAvailable)
+                    {
+                        <CbAlert Severity="Severity.Success" Dense="true" Title="TPM 2.0 available">swtpm: @installation.SwtpmPath</CbAlert>
+                    }
+                    else
+                    {
+                        <CbAlert Severity="Severity.Normal" Dense="true" Title="TPM not available">@_TpmHint(installation)</CbAlert>
+                    }
+
+                    @foreach (var binary in installation.Binaries)
+                    {
+                        var support = installation.GetSecureBootSupport(binary.Architecture);
+                        <CbAlert Severity="@(support == SecureBootSupport.Available ? Severity.Success : Severity.Normal)" Dense="true"
+                                 Title="@($"Secure Boot for {binary.Architecture}: {_Describe(support)}")">
+                            @if (support == SecureBootSupport.SoftwareEmulationOnly)
+                            {
+                                <span>The Secure Boot firmware needs SMM, which @binary.BestAccelerator doesn't provide, so it only runs without hardware acceleration.</span>
+                            }
+                        </CbAlert>
+                    }
+
+                    @if (!installation.TpmAvailable)
+                    {
+                        <CbAlert Severity="Severity.Info" Title="Windows 11 guests">
+                            When creating a Windows 11 VM, Virtualized offers a "Windows 11 compatibility" option that skips
+                            the installer's TPM and Secure Boot checks.
+                        </CbAlert>
+                    }
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+    }
+</div>
+
+@code {
+    private string? _qemuDirectory;
+
+    private QemuDetection? Detection => QemuEnvironment.Detection;
+
+    private QemuInstallation? Installation => QemuEnvironment.Installation;
+
+    private static string _InstallHint =>
+        OperatingSystem.IsWindows() ? "Install QEMU from qemu.org (it goes to C:\\Program Files\\qemu) or pick its folder above."
+        : OperatingSystem.IsMacOS() ? "Install it with \"brew install qemu\" or pick its folder above."
+        : "Install it with your package manager (e.g. qemu-system-x86 or qemu-full) or pick its folder above.";
+
+    protected override void OnInitialized()
+    {
+        _qemuDirectory = SettingsStore.Current.QemuDirectory;
+        QemuEnvironment.Changed += _OnEnvironmentChanged;
+    }
+
+    private async Task _BrowseAsync()
+    {
+        var folders = await App.MainWindow.ShowOpenFolderAsync("Select the QEMU folder", Installation?.Directory ?? "");
+        if (folders is { Length: > 0 })
+            _qemuDirectory = folders[0];
+    }
+
+    private async Task _SaveAndDetectAsync()
+    {
+        var directory = string.IsNullOrWhiteSpace(_qemuDirectory) ? null : _qemuDirectory.Trim();
+        await SettingsStore.SaveAsync(SettingsStore.Current with { QemuDirectory = directory });
+        await QemuEnvironment.RefreshAsync();
+    }
+
+    private static string _AccelerationHint(QemuSystemBinary binary)
+    {
+        if (OperatingSystem.IsWindows() && binary.Accelerators.Any(a => a.Name == "whpx"))
+            return "Enable the \"Windows Hypervisor Platform\" Windows feature and restart.";
+        if (OperatingSystem.IsLinux() && binary.Accelerators.Any(a => a.Name == "kvm"))
+            return "Check that /dev/kvm exists and that your user is in the kvm group.";
+        if (OperatingSystem.IsMacOS() && binary.Architecture != QemuLocator.HostArchitecture)
+            return "Hardware acceleration only works for guests with the same architecture as this Mac.";
+        return "";
+    }
+
+    private static string _TpmHint(QemuInstallation installation)
+    {
+        if (!installation.TpmBackendAvailable)
+            return OperatingSystem.IsWindows()
+                ? "QEMU can't emulate a TPM on Windows hosts."
+                : "This QEMU build has no TPM support.";
+
+        return OperatingSystem.IsMacOS()
+            ? "Install swtpm (\"brew install swtpm\") to give VMs a TPM 2.0."
+            : "Install swtpm with your package manager to give VMs a TPM 2.0.";
+    }
+
+    private static string _Describe(SecureBootSupport support) => support switch
+    {
+        SecureBootSupport.Available => "available",
+        SecureBootSupport.SoftwareEmulationOnly => "software emulation only",
+        _ => "no firmware",
+    };
+
+    private void _OnEnvironmentChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => QemuEnvironment.Changed -= _OnEnvironmentChanged;
+}

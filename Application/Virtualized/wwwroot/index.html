@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>SQemu</title>
+    <base href="/" />
+    <link href="css/app.css" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+    <script>
+        document.addEventListener('keydown', (e) => {
+            if (
+                e.key === 'F5' ||
+                (e.ctrlKey && ['r', 'R', 'p', 'P', 'f', 'F', 'u', 'U'].includes(e.key))
+            ) {
+                e.preventDefault();
+            }
+        });
+
+        // Backstop for SetContextMenuEnabled(false); text fields keep theirs for copy/paste.
+        document.addEventListener('contextmenu', (e) => {
+            if (!e.target.closest?.('input, textarea, [contenteditable="true"]')) {
+                e.preventDefault();
+            }
+        });
+
+        // WebView2 shows the link target in a status bubble while an <a href> is hovered, and Photino.NET
+        // has no switch for it. The href is parked in data-href while hovered and put back for the click,
+        // so Blazor's navigation still sees it.
+        const parkHref = (a) => {
+            a.dataset.href = a.getAttribute('href');
+            a.removeAttribute('href');
+        };
+        const restoreHref = (a) => {
+            if (!a.hasAttribute('href')) a.setAttribute('href', a.dataset.href);
+            delete a.dataset.href;
+        };
+        document.addEventListener('mouseover', (e) => {
+            const a = e.target.closest?.('a[href]');
+            if (a) parkHref(a);
+        });
+        document.addEventListener('mouseout', (e) => {
+            const a = e.target.closest?.('a[data-href]');
+            if (a && !a.contains(e.relatedTarget)) restoreHref(a);
+        });
+        window.addEventListener('click', (e) => {
+            const a = e.target.closest?.('a[data-href]');
+            if (!a) return;
+            restoreHref(a);
+            setTimeout(() => {
+                if (a.isConnected && a.matches(':hover') && a.hasAttribute('href')) parkHref(a);
+            });
+        }, true);
+    </script>
+    <style>
+        a[data-href] {
+            cursor: pointer;
+        }
+    </style>
+    <style>
+        /* Loading skeleton: the window frame and the VM list, drawn before Blazor starts. The colors are the
+           Cerberus default theme's, since its stylesheet only arrives with the first render. */
+        .loading-scr {
+            --sk-background: #fff;
+            --sk-surface: #fff;
+            --sk-titlebar: #f4f4f5;
+            --sk-divider: rgba(9, 9, 11, .12);
+            --sk-bone: rgba(9, 9, 11, .08);
+            --sk-shine: rgba(9, 9, 11, .04);
+            --sk-primary: rgba(79, 70, 229, .35);
+
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            border: 1px solid var(--sk-divider);
+            background: var(--sk-background);
+            overflow: hidden;
+        }
+        @media (prefers-color-scheme: dark) {
+            .loading-scr {
+                --sk-background: #18181b;
+                --sk-surface: #202024;
+                --sk-titlebar: #2a2a2f;
+                --sk-divider: rgba(250, 250, 250, .12);
+                --sk-bone: rgba(250, 250, 250, .08);
+                --sk-shine: rgba(250, 250, 250, .14);
+                --sk-primary: rgba(129, 140, 248, .35);
+            }
+        }
+
+        .sk {
+            flex-shrink: 0;
+            border-radius: 5px;
+            background:
+                linear-gradient(90deg, transparent 0, var(--sk-shine) 50%, transparent 100%) no-repeat,
+                var(--sk-bone);
+            background-size: 40% 100%, auto;
+            /* One sweep across the whole window rather than one per bone. */
+            background-attachment: fixed, scroll;
+            animation: sk-shimmer 1.4s ease-in-out infinite;
+        }
+        .sk--circle { border-radius: 50%; }
+        .sk--pill { border-radius: 999px; }
+        .sk--primary { background-color: var(--sk-primary); }
+        @keyframes sk-shimmer {
+            from { background-position: -150% 0, 0 0; }
+            to { background-position: 250% 0, 0 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .sk { animation: none; background-image: none; }
+        }
+
+        /* Matches .wd-titlebar from Photino.Cerberus. */
+        .sk-titlebar {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-sizing: border-box;
+            height: 40px;
+            padding-left: 10px;
+            background: var(--sk-titlebar);
+            border-bottom: 1px solid var(--sk-divider);
+        }
+        .sk-titlebar__spacer { flex: 1; }
+        .sk-titlebar__btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 46px;
+            height: 100%;
+        }
+
+        /* Matches .vm-page and .vm-grid from app.css. */
+        .sk-page {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            box-sizing: border-box;
+            padding: 1rem 1.25rem;
+            min-height: 0;
+        }
+        .sk-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .sk-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1rem;
+        }
+        .sk-card {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 16px;
+            border: 1px solid var(--sk-divider);
+            border-radius: 8px;
+            background: var(--sk-surface);
+        }
+        .sk-card__title {
+            display: flex;
+            flex: 1;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+        }
+        .sk-card__chips { flex-wrap: wrap; }
+        .sk-card__actions { justify-content: flex-end; }
+    </style>
+</head>
+
+<body>
+
+    <div class="status-bar-safe-area"></div>
+    <div id="app">
+        <div class="loading-scr" aria-busy="true" aria-label="Loading">
+            <div class="sk-titlebar">
+                <div class="sk sk--circle" style="width: 28px; height: 28px"></div>
+                <div class="sk" style="width: 22px; height: 22px"></div>
+                <div class="sk" style="width: 84px; height: 12px"></div>
+                <div class="sk-titlebar__spacer"></div>
+                <div class="sk-titlebar__btn"><div class="sk" style="width: 12px; height: 2px"></div></div>
+                <div class="sk-titlebar__btn"><div class="sk" style="width: 11px; height: 11px"></div></div>
+                <div class="sk-titlebar__btn"><div class="sk" style="width: 12px; height: 12px"></div></div>
+            </div>
+            <div class="sk-page">
+                <div class="sk-row">
+                    <div class="sk" style="width: 190px; height: 26px"></div>
+                    <div class="sk-titlebar__spacer"></div>
+                    <div class="sk sk--primary" style="width: 104px; height: 36px"></div>
+                </div>
+                <div class="sk-grid">
+                    <template id="sk-card">
+                        <div class="sk-card">
+                            <div class="sk-row" style="gap: 12px">
+                                <div class="sk sk--circle" style="width: 40px; height: 40px"></div>
+                                <div class="sk-card__title">
+                                    <div class="sk" style="width: 55%; height: 14px"></div>
+                                    <div class="sk" style="width: 75%; height: 11px"></div>
+                                </div>
+                                <div class="sk sk--pill" style="width: 76px; height: 24px"></div>
+                            </div>
+                            <div class="sk-row sk-card__chips">
+                                <div class="sk sk--pill" style="width: 72px; height: 24px"></div>
+                                <div class="sk sk--pill" style="width: 64px; height: 24px"></div>
+                                <div class="sk sk--pill" style="width: 68px; height: 24px"></div>
+                                <div class="sk sk--pill" style="width: 52px; height: 24px"></div>
+                                <div class="sk sk--pill" style="width: 96px; height: 24px"></div>
+                            </div>
+                            <div class="sk-row sk-card__actions">
+                                <div class="sk" style="width: 72px; height: 32px"></div>
+                                <div class="sk sk--circle" style="width: 32px; height: 32px"></div>
+                            </div>
+                        </div>
+                    </template>
+                    <script>
+                        (() => {
+                            const card = document.getElementById('sk-card');
+                            for (let i = 0; i < 6; i++) card.before(card.content.cloneNode(true));
+                        })();
+                    </script>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss">🗙</a>
+    </div>
+
+    <script src="_framework/blazor.webview.js"></script>
+</body>
+
+</html>

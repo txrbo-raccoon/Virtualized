@@ -1,0 +1,56 @@
+﻿@inherits LayoutComponentBase
+@inject Virtualized.Qemu.QemuEnvironment QemuEnvironment
+@inject Virtualized.Vms.VmManager VmManager
+@inject NavigationManager Nav
+
+<CbThemeProvider @bind-Theme="_theme" Mode="_mode" ModeChanged="_OnModeChanged">
+    <CerberusWindow Title="Virtualized" Icon="favicon.ico">
+        <TitleBarStart>
+            @if (_isOnSettings)
+            {
+                <CbIconButton OnClick="_ToggleSettingsPage" Icon="arrow_back"></CbIconButton>
+            }
+            else
+            {
+                <CbIconButton OnClick="_ToggleSettingsPage" Icon="settings"></CbIconButton>
+            }
+        </TitleBarStart>
+        <ChildContent>
+            <div class="hub-shell">
+                <main class="hub-page">
+                    @Body
+                </main>
+            </div>
+        </ChildContent>
+    </CerberusWindow>
+
+    <CbSnackbarProvider Position="Origin.BottomRight" />
+</CbThemeProvider>
+
+@code {
+    private CbTheme _theme = CbTheme.Default;
+    private ThemeMode _mode;
+    private bool _isOnSettings = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (QemuEnvironment.Detection is null)
+        {
+            await QemuEnvironment.RefreshAsync();
+            // VMs left running when the app last closed are picked up again.
+            await VmManager.ReattachAllAsync();
+        }
+    }
+
+    private void _OnModeChanged(ThemeMode mode) => _mode = mode;
+
+    private void _ToggleSettingsPage()
+    {
+        _isOnSettings = !_isOnSettings;
+        if (_isOnSettings)
+            Nav.NavigateTo("/settings");
+        else
+            Nav.NavigateTo("/");
+        InvokeAsync(StateHasChanged);
+    }
+}

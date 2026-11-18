@@ -1,0 +1,122 @@
+@page "/vms/{Id:guid}/console"
+@using Virtualized.Vms
+@implements IDisposable
+@inject VmService VmService
+@inject VmManager VmManager
+
+<PageTitle>@(_vm?.Name ?? "Console")</PageTitle>
+
+@if (_notFound)
+{
+    <div class="settings-page">
+        <CbAlert Severity="Severity.Error" Title="VM not found">It may have been deleted. <a href="">Back to the list</a></CbAlert>
+    </div>
+}
+else if (_vm is not null)
+{
+    var info = VmManager.GetInfo(_vm.Id);
+    <VmConsole @ref="_console" Url="@_Url(info)" Scale="_scale" FullscreenChanged="_OnFullscreenChanged">
+        <Toolbar>
+            <div class="vm-console__toolbar">
+                <CbIconButton Icon="arrow_back" Title="Back to the list" Href="" />
+                <CbText Typo="Typo.Subtitle1" NoWrap="true">@_vm.Name</CbText>
+                <CbChip Size="Size.Small" Variant="Variant.Tonal" Color="@VmLabels.StatusColor(info.Status)"
+                        Icon="@VmLabels.StatusIcon(info.Status)" Text="@info.Status.ToString()" />
+                <CbSpacer />
+                @if (_Live(info))
+                {
+                    <CbIconButton Icon="@(_scale == ConsoleScale.Fit ? "fit_screen" : "crop_free")"
+                                  Title="@(_scale == ConsoleScale.Fit ? "Scaled to fit; click for actual size" : "Actual size; click to scale to fit")"
+                                  OnClick="_ToggleScale" />
+                    <CbMenu Icon="keyboard" Title="Send keys" Variant="Variant.Text" AnchorOrigin="Origin.BottomRight">
+                        <CbMenuItem OnClick="() => _console!.SendCtrlAltDelAsync()">Ctrl+Alt+Del</CbMenuItem>
+                        @foreach (var combo in _vm.GuestOs is GuestOs.Linux ? ConsoleKeys.LinuxTerminals.Append(ConsoleKeys.CtrlAltBackspace) : ConsoleKeys.Windows)
+                        {
+                            <CbMenuItem OnClick="() => _console!.SendKeysAsync(combo)">@combo.Label</CbMenuItem>
+                        }
+                    </CbMenu>
+                    <CbIconButton Icon="@(_fullscreen ? "fullscreen_exit" : "fullscreen")"
+                                  Title="@(_fullscreen ? "Exit fullscreen" : "Fullscreen (hides the sidebar and title bar)")"
+                                  OnClick="() => _console!.ToggleFullscreenAsync()" />
+                    <CbDivider Vertical="true" />
+                }
+                <VmActions Vm="_vm" ShowConsole="false" ShowManage="false" />
+            </div>
+            @if (info.Error is not null)
+            {
+                <CbAlert Severity="Severity.Error" Dense="true" Class="vm-console__alert">@info.Error</CbAlert>
+            }
+        </Toolbar>
+        <Placeholder>
+            <CbIcon Icon="@(info.Status == VmStatus.Stopping ? "power_settings_new" : "desktop_access_disabled")" Size="Size.Large" />
+            <CbText Typo="Typo.Body1">
+                @(info.Status switch
+                {
+                    VmStatus.Starting => "Starting…",
+                    VmStatus.Stopping => "Shutting down…",
+                    _ => $"{_vm.Name} is turned off.",
+                })
+            </CbText>
+        </Placeholder>
+    </VmConsole>
+}
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private VmDefinition? _vm;
+    private bool _notFound;
+    private VmConsole? _console;
+    private ConsoleScale _scale = ConsoleScale.Fit;
+    private bool _fullscreen;
+
+    private static bool _Live(VmRuntimeInfo info) =>
+        info.Status is VmStatus.Running or VmStatus.Paused or VmStatus.Suspended or VmStatus.Crashed;
+
+    /// <summary>The display is only reachable while QEMU runs; a new start comes with a new port.</summary>
+    private static string? _Url(VmRuntimeInfo info) =>
+        _Live(info) && info.State is { } state ? $"ws://127.0.0.1:{state.VncWebSocketPort}" : null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        VmManager.StatusChanged -= _OnStatusChanged;
+        VmService.Repository.Changed -= _OnRepositoryChanged;
+        VmManager.StatusChanged += _OnStatusChanged;
+        VmService.Repository.Changed += _OnRepositoryChanged;
+        await _LoadAsync();
+    }
+
+    private async Task _LoadAsync()
+    {
+        _vm = await VmService.Repository.GetAsync(Id);
+        _notFound = _vm is null;
+    }
+
+    private void _ToggleScale() => _scale = _scale == ConsoleScale.Fit ? ConsoleScale.Actual : ConsoleScale.Fit;
+
+    /// <summary>
+    /// The console covers the whole screen, hiding the title bar and sidebar: browser fullscreen on Linux
+    /// (WebKitGTK takes the window with it), Win32Fullscreen on Windows.
+    /// </summary>
+    private void _OnFullscreenChanged(bool fullscreen) => _fullscreen = fullscreen;
+
+    private void _OnStatusChanged(Guid id)
+    {
+        if (id == Id)
+            InvokeAsync(StateHasChanged);
+    }
+
+    // Picks up an ISO change or a rename made from elsewhere.
+    private void _OnRepositoryChanged() => InvokeAsync(async () =>
+    {
+        await _LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        VmManager.StatusChanged -= _OnStatusChanged;
+        VmService.Repository.Changed -= _OnRepositoryChanged;
+    }
+}

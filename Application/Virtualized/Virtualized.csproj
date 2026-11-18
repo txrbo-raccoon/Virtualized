@@ -1,0 +1,145 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net11.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <ApplicationIcon>appicon.ico</ApplicationIcon>
+        <Company>txrbo-raccoon</Company>
+        <PublishReadyToRun>true</PublishReadyToRun>
+        <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Cerberus.UI" Version="0.3.0" />
+        <PackageReference Include="Photino.Cerberus" Version="0.1.0" />
+        <PackageReference Include="Photino.Native" Version="4.0.22" />
+        <PackageReference Include="Photino.NET" Version="4.0.16" />
+        <PackageReference Include="Photino.Blazor" Version="4.0.13" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\Libraries\Virtualized.Assets\Virtualized.Assets.csproj" />
+        <ProjectReference Include="..\..\Libraries\Virtualized.Assets.Packer\Virtualized.Assets.Packer.csproj" ReferenceOutputAssembly="false" Private="false"
+                          GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Content Update="wwwroot\**" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+        <None Update="appicon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <_ContentIncludedByDefault Remove="wwwroot\sample-data\weather.json" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="Virtualized.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <WebRootFile Include="wwwroot\**" />
+    </ItemGroup>
+
+    <Target Name="_SetWebRootPaths">
+        <PropertyGroup>
+            <WebRootArchive>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)wwwroot.vpak</WebRootArchive>
+            <WebRootKeyFile>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)wwwroot.vpak.key</WebRootKeyFile>
+            <WebRootKeySource>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)WebRootKey.g.cs</WebRootKeySource>
+        </PropertyGroup>
+    </Target>
+
+    <Target Name="_BuildAssetPacker">
+        <MSBuild Projects="..\..\Libraries\Virtualized.Assets.Packer\Virtualized.Assets.Packer.csproj" Targets="Build" Properties="Configuration=$(Configuration)"
+                 RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun;TargetFramework">
+            <Output TaskParameter="TargetOutputs" PropertyName="AssetPackerPath" />
+        </MSBuild>
+    </Target>
+
+    <Target Name="_EnsureWebRootKey" DependsOnTargets="_SetWebRootPaths;_BuildAssetPacker" Condition="!Exists('$(WebRootKeyFile)')">
+        <Exec Command="dotnet &quot;$(AssetPackerPath)&quot; --generate-key &quot;$(WebRootKeyFile)&quot;" />
+    </Target>
+
+    <Target Name="PackWebRoot" BeforeTargets="BeforeBuild" DependsOnTargets="_SetWebRootPaths;_BuildAssetPacker;_EnsureWebRootKey"
+            Inputs="@(WebRootFile);$(WebRootKeyFile)" Outputs="$(WebRootArchive)">
+        <Exec Command="dotnet &quot;$(AssetPackerPath)&quot; -q -k &quot;$(WebRootKeyFile)&quot; &quot;$(MSBuildProjectDirectory)\wwwroot&quot; &quot;$(WebRootArchive)&quot;" ConsoleToMSBuild="true" />
+    </Target>
+
+    <!-- Embeds the archive and compiles its key into WebRootKey (read by ArchiveFileProvider). -->
+    <Target Name="EmbedWebRoot" AfterTargets="PackWebRoot">
+        <ReadLinesFromFile File="$(WebRootKeyFile)">
+            <Output TaskParameter="Lines" PropertyName="_WebRootKeyHex" />
+        </ReadLinesFromFile>
+        <PropertyGroup>
+            <_WebRootKeyBytes>$([System.Text.RegularExpressions.Regex]::Replace($(_WebRootKeyHex.Trim()), '(..)', '0x$1, '))</_WebRootKeyBytes>
+            <_WebRootKeyCode>// &lt;auto-generated/&gt; Written by the build from $(WebRootKeyFile) (see PackWebRoot in Virtualized.csproj).
+namespace Virtualized%3B
+
+internal static class WebRootKey
+{
+    /// &lt;summary&gt;AES-256-GCM key of the embedded wwwroot.vpak.&lt;/summary&gt;
+    public static ReadOnlySpan&lt;byte&gt; Value =&gt; [$(_WebRootKeyBytes)]%3B
+}</_WebRootKeyCode>
+        </PropertyGroup>
+        <WriteLinesToFile File="$(WebRootKeySource)" Lines="$(_WebRootKeyCode)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+        <ItemGroup>
+            <EmbeddedResource Include="$(WebRootArchive)" LogicalName="wwwroot.vpak" />
+            <Compile Include="$(WebRootKeySource)" />
+            <FileWrites Include="$(WebRootArchive);$(WebRootKeyFile);$(WebRootKeySource)" />
+        </ItemGroup>
+    </Target>
+    
+    <PropertyGroup>
+        <Obfuscate Condition="'$(Obfuscate)' == '' And '$(Configuration)' == 'Release' And '$(_IsPublishing)' == 'true'">true</Obfuscate>
+        <CopyOutputSymbolsToPublishDirectory Condition="'$(Obfuscate)' == 'true'">false</CopyOutputSymbolsToPublishDirectory>
+    </PropertyGroup>
+
+    <Target Name="_SetObfuscationPaths">
+        <PropertyGroup>
+            <ObfuscationDirectory>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)obfuscated</ObfuscationDirectory>
+            <ObfuscationConfig>$(ObfuscationDirectory)\obfuscar.xml</ObfuscationConfig>
+            <ObfuscatedAssembly>$(ObfuscationDirectory)\$(TargetFileName)</ObfuscatedAssembly>
+        </PropertyGroup>
+        <ItemGroup>
+            <_ObfuscatedLibrary Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)%(Extension)' == 'Virtualized.Assets.dll'" />
+            <_ObfuscatedLibrarySymbols Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)%(Extension)' == 'Virtualized.Assets.pdb'" />
+        </ItemGroup>
+    </Target>
+
+    <Target Name="ObfuscateAssembly" AfterTargets="CoreCompile" Condition="'$(Obfuscate)' == 'true'" DependsOnTargets="_SetObfuscationPaths"
+            Inputs="@(IntermediateAssembly);@(_ObfuscatedLibrary);obfuscation.rules.xml" Outputs="$(ObfuscatedAssembly)">
+        <ReadLinesFromFile File="obfuscation.rules.xml">
+            <Output TaskParameter="Lines" ItemName="_ObfuscationRule" />
+        </ReadLinesFromFile>
+        <ItemGroup>
+            <_ObfuscationSearchPath Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
+            <_ObfuscationLine Include="&lt;?xml version=&quot;1.0&quot;?&gt;;&lt;Obfuscator&gt;" />
+            <_ObfuscationLine Include="&lt;Var name=&quot;OutPath&quot; value=&quot;$(ObfuscationDirectory)&quot; /&gt;" />
+            <_ObfuscationLine Include="&lt;Var name=&quot;KeepPublicApi&quot; value=&quot;false&quot; /&gt;;&lt;Var name=&quot;HidePrivateApi&quot; value=&quot;true&quot; /&gt;" />
+            <_ObfuscationLine Include="&lt;Var name=&quot;RenameProperties&quot; value=&quot;false&quot; /&gt;" />
+            <_ObfuscationLine Include="@(_ObfuscationSearchPath->'&lt;AssemblySearchPath path=&quot;%(Identity)&quot; /&gt;')" />
+            <_ObfuscationLine Include="@(IntermediateAssembly->'&lt;Module file=&quot;%(FullPath)&quot;&gt;')" />
+            <_ObfuscationLine Include="@(_ObfuscationRule)" />
+            <_ObfuscationLine Include="&lt;/Module&gt;" />
+            <_ObfuscationLine Include="@(_ObfuscatedLibrary->'&lt;Module file=&quot;%(FullPath)&quot; /&gt;')" />
+            <_ObfuscationLine Include="&lt;/Obfuscator&gt;" />
+        </ItemGroup>
+        <MakeDir Directories="$(ObfuscationDirectory)" />
+        <WriteLinesToFile File="$(ObfuscationConfig)" Lines="@(_ObfuscationLine)" Overwrite="true" />
+        <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." StandardOutputImportance="low" />
+        <Exec Command="dotnet tool run obfuscar.console &quot;$(ObfuscationConfig)&quot;" WorkingDirectory="$(MSBuildProjectDirectory)\..\.."
+              StandardOutputImportance="low" />
+        <Message Text="Obfuscated $(TargetFileName) and @(_ObfuscatedLibrary->'%(Filename)%(Extension)') into $(ObfuscationDirectory)" Importance="high" />
+    </Target>
+
+    <Target Name="UseObfuscatedAssembly" AfterTargets="ObfuscateAssembly" Condition="'$(Obfuscate)' == 'true'">
+        <ItemGroup>
+            <IntermediateAssembly Remove="@(IntermediateAssembly)" />
+            <IntermediateAssembly Include="$(ObfuscatedAssembly)" />
+            <ReferenceCopyLocalPaths Remove="@(_ObfuscatedLibrary);@(_ObfuscatedLibrarySymbols)" />
+            <ReferenceCopyLocalPaths Include="@(_ObfuscatedLibrary->'$(ObfuscationDirectory)\%(Filename)%(Extension)')" />
+            <FileWrites Include="$(ObfuscationDirectory)\**" />
+        </ItemGroup>
+    </Target>
+</Project>

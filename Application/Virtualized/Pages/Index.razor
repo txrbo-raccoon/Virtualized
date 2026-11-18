@@ -1,0 +1,143 @@
+@page "/"
+@using Virtualized.Qemu
+@using Virtualized.Vms
+@implements IDisposable
+@inject VmService VmService
+@inject VmManager VmManager
+@inject QemuEnvironment QemuEnvironment
+
+<PageTitle>Virtual machines</PageTitle>
+
+<div class="vm-page">
+    <CbStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <CbText Typo="Typo.H5">Virtual machines</CbText>
+        <CbSpacer />
+        <CbButton Variant="Variant.Filled" StartIcon="add" Href="vms/new"
+                  Disabled="@(QemuEnvironment.Installation is null)">New VM</CbButton>
+    </CbStack>
+
+    @if (QemuEnvironment.Detection is { Installation: null })
+    {
+        <CbAlert Severity="Severity.Warning" Title="QEMU not found">
+            VMs can't be created or started until Virtualized finds QEMU. <a href="settings">Open Settings</a>
+        </CbAlert>
+    }
+
+    @foreach (var error in _list?.Errors ?? [])
+    {
+        <CbAlert Severity="Severity.Error" Dense="true" Title="A VM couldn't be loaded">
+            <div class="settings-path">@error.Directory</div>
+            <div>@error.Message</div>
+        </CbAlert>
+    }
+
+    @if (_list is null)
+    {
+        <CbProgressLinear Indeterminate="true" />
+    }
+    else if (_list.Vms.Count == 0)
+    {
+        <CbPaper Outlined="true" Class="vm-empty">
+            <CbIcon Icon="dns" Size="Size.Large" />
+            <CbText Typo="Typo.Subtitle1">No virtual machines yet</CbText>
+            <CbText Typo="Typo.Body2" Muted="true">Create one to install an operating system from an ISO image.</CbText>
+        </CbPaper>
+    }
+    else
+    {
+        <div class="vm-grid">
+            @foreach (var vm in _list.Vms)
+            {
+                var info = VmManager.GetInfo(vm.Id);
+                <CbCard Outlined="true" @key="vm.Id">
+                    <CbCardHeader Title="@vm.Name" Subtitle="@($"{VmLabels.Describe(vm.GuestOs)} · {vm.Architecture}")">
+                        <Avatar>
+                            <CbAvatar Variant="Variant.Tonal" Color="Color.Primary">
+                                <CbIcon Icon="@VmLabels.Icon(vm.GuestOs)" />
+                            </CbAvatar>
+                        </Avatar>
+                        <Actions>
+                            <CbChip Size="Size.Small" Variant="Variant.Tonal" Color="@VmLabels.StatusColor(info.Status)"
+                                    Icon="@VmLabels.StatusIcon(info.Status)" Text="@info.Status.ToString()" />
+                        </Actions>
+                    </CbCardHeader>
+                    <CbCardContent>
+                        <CbStack Spacing="2">
+                            <CbStack Row="true" Spacing="1" Wrap="true">
+                                <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="memory" Text="@($"{vm.CpuCores} {(vm.CpuCores == 1 ? "core" : "cores")}")" />
+                                <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="memory_alt" Text="@VmLabels.Memory(vm.MemoryMiB)" />
+                                @foreach (var disk in vm.Disks)
+                                {
+                                    <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="hard_drive" Text="@($"{disk.SizeGiB} GiB")" />
+                                }
+                                <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="developer_board" Text="@(vm.Firmware == FirmwareType.Uefi ? "UEFI" : "BIOS")" />
+                                @if (vm.SecureBoot)
+                                {
+                                    <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="verified_user" Text="Secure Boot" />
+                                }
+                                @if (vm.Tpm)
+                                {
+                                    <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="key" Text="TPM" />
+                                }
+                                @if (vm.InstallMedia is not null)
+                                {
+                                    <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="album" Text="@Path.GetFileName(vm.InstallMedia)" />
+                                }
+                                @if (QemuCommandBuilder.NeedsUnattendDrive(vm))
+                                {
+                                    <CbTooltip Text="Windows Setup will skip its TPM, Secure Boot, CPU and RAM checks">
+                                        <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="usb" Text="Windows 11 compatibility" />
+                                    </CbTooltip>
+                                }
+                                @foreach (var forward in vm.PortForwards)
+                                {
+                                    <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="swap_horiz"
+                                            Text="@($"{forward.HostPort} → {forward.GuestPort}/{forward.Protocol.ToString().ToLowerInvariant()}")" />
+                                }
+                            </CbStack>
+                            @if (info.Error is not null)
+                            {
+                                <CbAlert Severity="Severity.Error" Dense="true" Title="@(info.Status == VmStatus.Stopped ? "The VM couldn't run" : "Problem")">
+                                    <pre class="vm-error">@info.Error</pre>
+                                    <div class="settings-path">@VmManager.GetLogPath(vm.Id)</div>
+                                </CbAlert>
+                            }
+                        </CbStack>
+                    </CbCardContent>
+                    <CbCardActions Justify="Justify.End">
+                        <VmActions Vm="vm" />
+                    </CbCardActions>
+                </CbCard>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private VmList? _list;
+
+    protected override async Task OnInitializedAsync()
+    {
+        VmService.Repository.Changed += _OnChanged;
+        QemuEnvironment.Changed += _OnChanged;
+        VmManager.StatusChanged += _OnStatusChanged;
+        await _LoadAsync();
+    }
+
+    private async Task _LoadAsync() => _list = await VmService.Repository.ListAsync();
+
+    private void _OnChanged() => InvokeAsync(async () =>
+    {
+        await _LoadAsync();
+        StateHasChanged();
+    });
+
+    private void _OnStatusChanged(Guid _) => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        VmService.Repository.Changed -= _OnChanged;
+        QemuEnvironment.Changed -= _OnChanged;
+        VmManager.StatusChanged -= _OnStatusChanged;
+    }
+}

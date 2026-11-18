@@ -1,0 +1,273 @@
+@page "/vms/new"
+@page "/vms/{Id:guid}/edit"
+@using Photino.Blazor
+@using Virtualized.Qemu
+@using Virtualized.Vms
+@inject VmService VmService
+@inject VmManager VmManager
+@inject QemuEnvironment QemuEnvironment
+@inject NavigationManager Navigation
+@inject ISnackbarService Snackbar
+@inject PhotinoBlazorApp App
+
+<PageTitle>@(_draft?.IsNew == false ? "Edit VM" : "New VM")</PageTitle>
+
+<div class="settings-page">
+    @if (_notFound)
+    {
+        <CbAlert Severity="Severity.Error" Title="VM not found">It may have been deleted. <a href="">Back to the list</a></CbAlert>
+    }
+    else if (_draft is null)
+    {
+        <CbProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        <CbText Typo="Typo.H5">@(_draft.IsNew ? "New virtual machine" : $"Edit {_originalName}")</CbText>
+
+        @if (_draft.Id is { } id && VmManager.IsActive(id))
+        {
+            <CbAlert Severity="Severity.Info">The VM is running. Changes take effect the next time it starts.</CbAlert>
+        }
+
+        @if (_errors.TryGetValue(VmValidator.General, out var general))
+        {
+            <CbAlert Severity="Severity.Error">@general</CbAlert>
+        }
+
+        <CbCard Outlined="true">
+            <CbCardHeader Title="General" />
+            <CbCardContent>
+                <CbStack Spacing="3">
+                    <CbTextField @bind-Value="_draft.Name" Label="Name" Required="true" Immediate="true"
+                                 Error="@_HasError(nameof(VmDraft.Name))" ErrorText="@_Error(nameof(VmDraft.Name))" />
+                    <CbStack Row="true" Spacing="2">
+                        <CbSelect T="GuestOs" Value="_draft.GuestOs" ValueChanged="_OnGuestOsChanged" Label="Operating system" Style="flex: 1"
+                                  HelperText="@(_draft.IsNew ? "Sets recommended hardware for this system." : null)">
+                            @foreach (var os in Enum.GetValues<GuestOs>())
+                            {
+                                <CbSelectItem Value="os" Text="@VmLabels.Describe(os)" />
+                            }
+                        </CbSelect>
+                        <CbSelect T="string" Value="_draft.Architecture" ValueChanged="_OnArchitectureChanged" Label="Architecture" Style="flex: 1"
+                                  Disabled="@(!_draft.IsNew)"
+                                  HelperText="@(_draft.IsNew ? _ArchitectureHint : "Can't be changed after the VM is created.")"
+                                  Error="@_HasError(nameof(VmDraft.Architecture))" ErrorText="@_Error(nameof(VmDraft.Architecture))">
+                            @foreach (var architecture in _architectures)
+                            {
+                                <CbSelectItem Value="architecture" Text="@architecture" />
+                            }
+                        </CbSelect>
+                    </CbStack>
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+
+        <CbCard Outlined="true">
+            <CbCardHeader Title="Hardware" />
+            <CbCardContent>
+                <CbStack Spacing="3">
+                    <CbSlider Value="_draft.CpuCores" ValueChanged="value => _draft.CpuCores = (int)value"
+                              Min="1" Max="HostInfo.ProcessorCount" Step="1" ShowValue="true"
+                              Label="@($"CPU cores: {_draft.CpuCores} of {HostInfo.ProcessorCount}")"
+                              Error="@_HasError(nameof(VmDraft.CpuCores))" ErrorText="@_Error(nameof(VmDraft.CpuCores))" />
+                    <CbSlider Value="_draft.MemoryMiB" ValueChanged="value => _draft.MemoryMiB = (int)value"
+                              Min="VmValidator.MinMemoryMiB" Max="HostInfo.MaxGuestMemoryMiB" Step="256"
+                              Label="@($"Memory: {VmLabels.Memory(_draft.MemoryMiB)} of {VmLabels.Memory(HostInfo.TotalMemoryMiB)}")"
+                              Error="@_HasError(nameof(VmDraft.MemoryMiB))" ErrorText="@_Error(nameof(VmDraft.MemoryMiB))" />
+                    @if (_draft.IsNew)
+                    {
+                        <CbTextField @bind-Value="_draft.DiskSizeGiB" InputType="InputType.Number" Label="Disk size (GiB)"
+                                     HelperText="The disk only takes up space as the VM writes to it."
+                                     Error="@_HasError(nameof(VmDraft.DiskSizeGiB))" ErrorText="@_Error(nameof(VmDraft.DiskSizeGiB))" />
+                    }
+                    else
+                    {
+                        <CbText Typo="Typo.Body2" Muted="true">Disk: @_draft.DiskSizeGiB GiB</CbText>
+                    }
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+
+        <CbCard Outlined="true">
+            <CbCardHeader Title="Installation media" Subtitle="An ISO image in the virtual CD drive. Remove it after installing." />
+            <CbCardContent>
+                <CbStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <CbTextField @bind-Value="_draft.InstallMedia" Label="ISO image" Placeholder="None" Clearable="true" Style="flex: 1"
+                                 Error="@_HasError(nameof(VmDraft.InstallMedia))" ErrorText="@_Error(nameof(VmDraft.InstallMedia))" />
+                    <CbButton Variant="Variant.Outlined" StartIcon="folder_open" OnClick="_BrowseIsoAsync">Browse</CbButton>
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+
+        <CbCard Outlined="true">
+            <CbCardHeader Title="Firmware and security" />
+            <CbCardContent>
+                <CbStack Spacing="2">
+                    <CbRadioGroup T="FirmwareType" @bind-Value="_draft.Firmware" Row="true" Label="Firmware"
+                                  Error="@_HasError(nameof(VmDraft.Firmware))" ErrorText="@_Error(nameof(VmDraft.Firmware))">
+                        <CbRadio Value="FirmwareType.Uefi" Text="UEFI" />
+                        <CbRadio Value="FirmwareType.Bios" Text="BIOS (legacy)" Disabled="@(_draft.Architecture == "aarch64")" />
+                    </CbRadioGroup>
+                    <CbSwitch @bind-Value="_draft.SecureBoot" Label="Secure Boot"
+                              Disabled="@(_draft.Firmware != FirmwareType.Uefi || !_SecureBootAvailable)"
+                              HelperText="@(_SecureBootAvailable ? "Only boots signed operating systems." : "Not available with hardware acceleration on this computer.")"
+                              Error="@_HasError(nameof(VmDraft.SecureBoot))" ErrorText="@_Error(nameof(VmDraft.SecureBoot))" />
+                    <CbSwitch @bind-Value="_draft.Tpm" Label="TPM 2.0"
+                              Disabled="@(!_TpmAvailable)"
+                              HelperText="@(_TpmAvailable ? "An emulated TPM chip, needed by Windows 11." : "Not available on this computer.")"
+                              Error="@_HasError(nameof(VmDraft.Tpm))" ErrorText="@_Error(nameof(VmDraft.Tpm))" />
+                    @if (_draft.GuestOs == GuestOs.Windows11)
+                    {
+                        <CbSwitch @bind-Value="_draft.Windows11Compatibility" Label="Windows 11 compatibility"
+                                  HelperText="While installing from the ISO, an extra USB drive gives Windows Setup an answer file that skips its TPM, Secure Boot, CPU and RAM checks. Needed when this computer can't provide a TPM or Secure Boot." />
+                    }
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+
+        <CbCard Outlined="true">
+            <CbCardHeader Title="Network" />
+            <CbCardContent>
+                <CbStack Spacing="2">
+                    <CbSwitch @bind-Value="_draft.NetworkEnabled" Label="Network access (NAT)"
+                              HelperText="The VM reaches the internet through this computer. Forwarded ports are only reachable from this computer (127.0.0.1)." />
+                    @if (_draft.NetworkEnabled)
+                    {
+                        @for (var i = 0; i < _draft.PortForwards.Count; i++)
+                        {
+                            var index = i;
+                            var forward = _draft.PortForwards[index];
+                            var key = $"{nameof(VmDraft.PortForwards)}[{index}]";
+                            <CbStack Row="true" Spacing="2" AlignItems="AlignItems.Start">
+                                <CbSelect T="PortProtocol" @bind-Value="forward.Protocol" Label="Protocol" Style="width: 110px">
+                                    <CbSelectItem Value="PortProtocol.Tcp" Text="TCP" />
+                                    <CbSelectItem Value="PortProtocol.Udp" Text="UDP" />
+                                </CbSelect>
+                                <CbTextField @bind-Value="forward.HostPort" InputType="InputType.Number" Label="Host port" Style="flex: 1"
+                                             Error="@_HasError(key)" ErrorText="@_Error(key)" />
+                                <CbTextField @bind-Value="forward.GuestPort" InputType="InputType.Number" Label="VM port" Style="flex: 1" />
+                                <CbIconButton Icon="delete" Title="Remove" Class="mt-2" OnClick="() => _draft.PortForwards.RemoveAt(index)" />
+                            </CbStack>
+                        }
+                        <div>
+                            <CbButton Variant="Variant.Text" StartIcon="add" OnClick="_AddPortForward">Add port forward</CbButton>
+                        </div>
+                    }
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+
+        <CbStack Row="true" Spacing="2" Justify="Justify.End">
+            <CbButton Variant="Variant.Text" Href="">Cancel</CbButton>
+            <CbButton Variant="Variant.Filled" StartIcon="@(_draft.IsNew ? "add" : "save")" Loading="_saving" OnClick="_SaveAsync">
+                @(_draft.IsNew ? "Create VM" : "Save")
+            </CbButton>
+        </CbStack>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid? Id { get; set; }
+
+    private VmDraft? _draft;
+    private string _originalName = "";
+    private bool _notFound;
+    private bool _saving;
+    private Dictionary<string, string> _errors = [];
+
+    private QemuInstallation? Qemu => QemuEnvironment.Installation;
+
+    private IEnumerable<string> _architectures =>
+        Qemu?.Binaries.Select(b => b.Architecture) ?? [_draft!.Architecture];
+
+    private bool _SecureBootAvailable => Qemu?.GetSecureBootSupport(_draft!.Architecture) == SecureBootSupport.Available;
+
+    private bool _TpmAvailable => Qemu?.TpmAvailable == true;
+
+    private string _ArchitectureHint =>
+        Qemu?.FindBinary(_draft!.Architecture) is { HasHardwareAcceleration: false }
+            ? "No hardware acceleration for this architecture: the VM will be slow."
+            : "Hardware accelerated on this computer.";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _errors = [];
+        if (Id is { } id)
+        {
+            var vm = await VmService.Repository.GetAsync(id);
+            _notFound = vm is null;
+            if (vm is not null)
+            {
+                _draft = VmDraft.FromDefinition(vm);
+                _originalName = vm.Name;
+            }
+        }
+        else
+        {
+            _draft = new VmDraft();
+            _draft.ApplyPreset(GuestOs.Linux, Qemu);
+        }
+    }
+
+    private void _OnGuestOsChanged(GuestOs os)
+    {
+        // Only new VMs get the preset; on an existing VM changing the OS shouldn't silently resize it.
+        if (_draft!.IsNew)
+            _draft.ApplyPreset(os, Qemu);
+        else
+            _draft.GuestOs = os;
+    }
+
+    private void _OnArchitectureChanged(string architecture)
+    {
+        _draft!.Architecture = architecture;
+        _draft.ApplyPreset(_draft.GuestOs, Qemu);
+    }
+
+    private async Task _BrowseIsoAsync()
+    {
+        var start = string.IsNullOrWhiteSpace(_draft!.InstallMedia) ? null : Path.GetDirectoryName(_draft.InstallMedia);
+        var files = await App.MainWindow.ShowOpenFileAsync("Select an ISO image", start, false,
+            [("Disc images", ["*.iso"]), ("All files", ["*.*"])]);
+        if (files is { Length: > 0 })
+            _draft.InstallMedia = files[0];
+    }
+
+    private void _AddPortForward()
+    {
+        // Suggest SSH on the first free host port from 2222 up, the usual convention for a VM.
+        var hostPort = 2222;
+        while (_draft!.PortForwards.Any(p => p.HostPort == hostPort))
+            hostPort++;
+        _draft.PortForwards.Add(new PortForwardDraft { HostPort = hostPort, GuestPort = 22 });
+    }
+
+    private async Task _SaveAsync()
+    {
+        _errors = await VmService.ValidateAsync(_draft!);
+        if (_errors.Count > 0)
+            return;
+
+        _saving = true;
+        try
+        {
+            var vm = _draft!.IsNew ? await VmService.CreateAsync(_draft) : await VmService.UpdateAsync(_draft);
+            Snackbar.Add(_draft.IsNew ? $"{vm.Name} was created." : $"{vm.Name} was saved.", Severity.Success);
+            Navigation.NavigateTo("");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or QemuImgException or TimeoutException)
+        {
+            _errors[VmValidator.General] = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private bool _HasError(string key) => _errors.ContainsKey(key);
+
+    private string? _Error(string key) => _errors.GetValueOrDefault(key);
+}

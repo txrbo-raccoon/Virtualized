@@ -1,0 +1,192 @@
+@using Photino.Blazor
+@using Virtualized.Qemu
+@using Virtualized.Vms
+@inject VmService VmService
+@inject VmManager VmManager
+@inject QemuEnvironment QemuEnvironment
+@inject ISnackbarService Snackbar
+@inject PhotinoBlazorApp App
+
+@* The buttons and menu that start, stop and control one VM, shared by the VM list and the console page. *@
+
+@if (_info.Status == VmStatus.Stopped)
+{
+    <CbButton Variant="Variant.Text" StartIcon="play_arrow" Loading="_busy"
+              Disabled="@(QemuEnvironment.Installation is null)" OnClick="_StartAsync">Start</CbButton>
+    @if (ShowManage)
+    {
+        <CbButton Variant="Variant.Text" StartIcon="edit" Href="@($"vms/{Vm.Id}/edit")">Edit</CbButton>
+        <CbIconButton Icon="history" Title="Snapshots" Href="@($"vms/{Vm.Id}/snapshots")" />
+        <CbButton Variant="Variant.Text" Color="Color.Error" StartIcon="delete" OnClick="() => _confirmDelete = true">Delete</CbButton>
+    }
+}
+else
+{
+    @if (ShowConsole && _Live)
+    {
+        <CbButton Variant="Variant.Text" StartIcon="desktop_windows" Href="@($"vms/{Vm.Id}/console")">Console</CbButton>
+    }
+    @if (_info.Status is VmStatus.Paused or VmStatus.Suspended)
+    {
+        <CbButton Variant="Variant.Text" StartIcon="play_arrow" Disabled="_busy"
+                  OnClick="() => _RunAsync(VmManager.ResumeAsync, null)">Resume</CbButton>
+    }
+    else
+    {
+        <CbButton Variant="Variant.Text" StartIcon="power_settings_new" Disabled="@(_busy || _info.Status != VmStatus.Running)"
+                  OnClick="@(() => _RunAsync(VmManager.ShutDownAsync, $"Asked {Vm.Name} to shut down."))">Shut down</CbButton>
+    }
+    @* Opens leftwards: the button sits at the right edge of cards and of the console toolbar. *@
+    <CbMenu Icon="more_vert" Title="More actions" Variant="Variant.Text" Disabled="_busy" AnchorOrigin="Origin.BottomRight">
+        @if (_info.Status == VmStatus.Running)
+        {
+            <CbMenuItem Icon="pause" OnClick="() => _RunAsync(VmManager.PauseAsync, null)">Pause</CbMenuItem>
+        }
+        <CbMenuItem Icon="restart_alt" Disabled="@(!_Live)" OnClick="@(() => _RunAsync(VmManager.ResetAsync, $"{Vm.Name} was restarted."))">Restart</CbMenuItem>
+        <CbMenuItem Icon="history" Href="@($"vms/{Vm.Id}/snapshots")">Snapshots</CbMenuItem>
+        <CbMenuItem Icon="album" Disabled="@(!_Live)" OnClick="_ChangeIsoAsync">Change ISO…</CbMenuItem>
+        @if (Vm.InstallMedia is not null)
+        {
+            <CbMenuItem Icon="eject" Disabled="@(!_Live)" OnClick="@(() => _SetIsoAsync(null, $"Ejected the ISO from {Vm.Name}."))">Eject ISO</CbMenuItem>
+        }
+        <CbMenuItem Icon="power_off" OnClick="() => _confirmForceStop = true">Force stop…</CbMenuItem>
+    </CbMenu>
+}
+
+<CbDialog Visible="_confirmDelete" VisibleChanged="visible => _confirmDelete = visible"
+          Title="@($"Delete {Vm.Name}?")" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <ChildContent>
+        <CbText Typo="Typo.Body2">The VM and its disk images will be deleted permanently. This can't be undone.</CbText>
+    </ChildContent>
+    <Actions>
+        <CbButton Variant="Variant.Text" OnClick="() => _confirmDelete = false">Cancel</CbButton>
+        <CbButton Variant="Variant.Filled" Color="Color.Error" StartIcon="delete" Loading="_busy" OnClick="_DeleteAsync">Delete</CbButton>
+    </Actions>
+</CbDialog>
+
+<CbDialog Visible="_confirmForceStop" VisibleChanged="visible => _confirmForceStop = visible"
+          Title="@($"Force stop {Vm.Name}?")" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <ChildContent>
+        <CbText Typo="Typo.Body2">
+            The VM is turned off immediately, like pulling the plug. Anything not saved inside it is lost.
+            Use Shut down to let the operating system close properly.
+        </CbText>
+    </ChildContent>
+    <Actions>
+        <CbButton Variant="Variant.Text" OnClick="() => _confirmForceStop = false">Cancel</CbButton>
+        <CbButton Variant="Variant.Filled" Color="Color.Error" StartIcon="power_off" OnClick="_ForceStopAsync">Force stop</CbButton>
+    </Actions>
+</CbDialog>
+
+@code {
+    [Parameter, EditorRequired]
+    public VmDefinition Vm { get; set; } = null!;
+
+    /// <summary>Show the Console button (off on the console page itself).</summary>
+    [Parameter]
+    public bool ShowConsole { get; set; } = true;
+
+    /// <summary>Show Edit and Delete for a stopped VM.</summary>
+    [Parameter]
+    public bool ShowManage { get; set; } = true;
+
+    private VmRuntimeInfo _info = new(VmStatus.Stopped);
+    private bool _busy;
+    private bool _confirmDelete;
+    private bool _confirmForceStop;
+
+    private bool _Live => _info.Status is VmStatus.Running or VmStatus.Paused or VmStatus.Suspended or VmStatus.Crashed;
+
+    // The parent re-renders on status changes and passes the VM again; the status is read fresh each time.
+    protected override void OnParametersSet() => _info = VmManager.GetInfo(Vm.Id);
+
+    private async Task _StartAsync()
+    {
+        _busy = true;
+        try
+        {
+            await VmManager.StartAsync(Vm);
+        }
+        catch (Exception ex) when (ex is VmStartException or QemuConfigurationException or QemuImgException
+                                       or IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // VmManager keeps the error; the VM's card or console page shows it.
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Runs a QMP action, reporting failures (and optionally success) in a snackbar.</summary>
+    private async Task _RunAsync(Func<Guid, Task> action, string? success)
+    {
+        _busy = true;
+        try
+        {
+            await action(Vm.Id);
+            if (success is not null)
+                Snackbar.Add(success, Severity.Info);
+        }
+        catch (Exception ex) when (ex is QmpException or InvalidOperationException)
+        {
+            Snackbar.Add($"{Vm.Name}: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task _ChangeIsoAsync()
+    {
+        var start = Vm.InstallMedia is null ? null : Path.GetDirectoryName(Vm.InstallMedia);
+        var files = await App.MainWindow.ShowOpenFileAsync("Select an ISO image", start, false,
+            [("Disc images", ["*.iso"]), ("All files", ["*.*"])]);
+        if (files is { Length: > 0 })
+            await _SetIsoAsync(files[0], $"{Path.GetFileName(files[0])} is in {Vm.Name}'s CD drive.");
+    }
+
+    private async Task _SetIsoAsync(string? iso, string success)
+    {
+        _busy = true;
+        try
+        {
+            await VmService.SetInstallMediaAsync(Vm.Id, iso);
+            Snackbar.Add(success, Severity.Info);
+        }
+        catch (Exception ex) when (ex is QmpException or InvalidOperationException or IOException)
+        {
+            Snackbar.Add($"{Vm.Name}: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task _ForceStopAsync()
+    {
+        _confirmForceStop = false;
+        await _RunAsync(VmManager.ForceStopAsync, null);
+    }
+
+    private async Task _DeleteAsync()
+    {
+        _busy = true;
+        try
+        {
+            await VmService.DeleteAsync(Vm.Id);
+            Snackbar.Add($"{Vm.Name} was deleted.", Severity.Success);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            Snackbar.Add($"{Vm.Name} couldn't be deleted: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+            _confirmDelete = false;
+        }
+    }
+}

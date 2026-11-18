@@ -1,0 +1,275 @@
+@page "/vms/{Id:guid}/snapshots"
+@using Virtualized.Qemu
+@using Virtualized.Vms
+@implements IDisposable
+@inject VmService VmService
+@inject VmManager VmManager
+@inject SnapshotService Snapshots
+@inject QemuEnvironment QemuEnvironment
+@inject ISnackbarService Snackbar
+
+<PageTitle>Snapshots</PageTitle>
+
+<div class="settings-page">
+    @if (_notFound)
+    {
+        <CbAlert Severity="Severity.Error" Title="VM not found">It may have been deleted. <a href="">Back to the list</a></CbAlert>
+    }
+    else if (_vm is not null)
+    {
+        var info = VmManager.GetInfo(_vm.Id);
+        <CbStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <CbIconButton Icon="arrow_back" Title="Back to the list" Href="" />
+            <CbText Typo="Typo.H5">Snapshots of @_vm.Name</CbText>
+            <CbChip Size="Size.Small" Variant="Variant.Tonal" Color="@VmLabels.StatusColor(info.Status)"
+                    Icon="@VmLabels.StatusIcon(info.Status)" Text="@info.Status.ToString()" />
+            <CbSpacer />
+            <CbButton Variant="Variant.Filled" StartIcon="add_a_photo" Disabled="@(_busy || !_CanSnapshot(info))"
+                      OnClick="_OpenCreate">Take snapshot</CbButton>
+        </CbStack>
+
+        <CbAlert Severity="Severity.Info" Dense="true">@_KindExplanation(info)</CbAlert>
+
+        @if (_busy)
+        {
+            <CbProgressLinear Indeterminate="true" />
+        }
+        @if (_error is not null)
+        {
+            <CbAlert Severity="Severity.Error" Dense="true" OnClose="() => _error = null">@_error</CbAlert>
+        }
+
+        <CbTable Items="_snapshots" Hover="true" Outlined="true" Loading="@(_snapshots is null)">
+            <HeaderContent>
+                <th>Name</th>
+                <th>Taken</th>
+                <th>Contents</th>
+                <th></th>
+            </HeaderContent>
+            <RowTemplate Context="snapshot">
+                <td>@snapshot.Name</td>
+                <td>@snapshot.CreatedUtc.ToLocalTime().ToString("g")</td>
+                <td>
+                    @if (snapshot.HasMemory)
+                    {
+                        <CbChip Size="Size.Small" Variant="Variant.Tonal" Color="Color.Primary" Icon="memory"
+                                Text="@($"Disks and memory ({_Size(snapshot.MemorySize)})")" />
+                    }
+                    else
+                    {
+                        <CbChip Size="Size.Small" Variant="Variant.Tonal" Icon="hard_drive" Text="Disks only" />
+                    }
+                </td>
+                <td class="snapshot-actions">
+                    <CbButton Variant="Variant.Text" StartIcon="history" Disabled="@(_busy || info.Status is VmStatus.Starting or VmStatus.Stopping)"
+                              OnClick="() => _snapshotToRestore = snapshot">Restore</CbButton>
+                    <CbIconButton Icon="delete" Title="Delete" Color="Color.Error" Disabled="_busy"
+                                  OnClick="() => _snapshotToDelete = snapshot" />
+                </td>
+            </RowTemplate>
+            <NoRecordsContent>No snapshots yet. A snapshot saves the VM as it is now, so you can come back to it later.</NoRecordsContent>
+        </CbTable>
+    }
+</div>
+
+<CbDialog Visible="_creating" VisibleChanged="visible => _creating = visible" Title="Take a snapshot" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <ChildContent>
+        <CbTextField @bind-Value="_newName" Label="Name" Immediate="true" Error="@(_nameError is not null)" ErrorText="@_nameError" />
+    </ChildContent>
+    <Actions>
+        <CbButton Variant="Variant.Text" OnClick="() => _creating = false">Cancel</CbButton>
+        <CbButton Variant="Variant.Filled" StartIcon="add_a_photo" OnClick="_CreateAsync">Take snapshot</CbButton>
+    </Actions>
+</CbDialog>
+
+<CbDialog Visible="@(_snapshotToRestore is not null)" VisibleChanged="visible => { if (!visible) _snapshotToRestore = null; }"
+          Title="@($"Restore \"{_snapshotToRestore?.Name}\"?")" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <ChildContent>
+        <CbText Typo="Typo.Body2">@_RestoreExplanation()</CbText>
+    </ChildContent>
+    <Actions>
+        <CbButton Variant="Variant.Text" OnClick="() => _snapshotToRestore = null">Cancel</CbButton>
+        <CbButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="history" OnClick="_RestoreAsync">Restore</CbButton>
+    </Actions>
+</CbDialog>
+
+<CbDialog Visible="@(_snapshotToDelete is not null)" VisibleChanged="visible => { if (!visible) _snapshotToDelete = null; }"
+          Title="@($"Delete \"{_snapshotToDelete?.Name}\"?")" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <ChildContent>
+        <CbText Typo="Typo.Body2">The snapshot is deleted permanently. The VM's current state isn't affected.</CbText>
+    </ChildContent>
+    <Actions>
+        <CbButton Variant="Variant.Text" OnClick="() => _snapshotToDelete = null">Cancel</CbButton>
+        <CbButton Variant="Variant.Filled" Color="Color.Error" StartIcon="delete" OnClick="_DeleteAsync">Delete</CbButton>
+    </Actions>
+</CbDialog>
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private VmDefinition? _vm;
+    private bool _notFound;
+    private IReadOnlyList<VmSnapshot>? _snapshots;
+    private bool _busy;
+    private string? _error;
+    private bool _creating;
+    private string _newName = "";
+    private string? _nameError;
+    private VmSnapshot? _snapshotToRestore;
+    private VmSnapshot? _snapshotToDelete;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        VmManager.StatusChanged -= _OnStatusChanged;
+        Snapshots.Changed -= _OnSnapshotsChanged;
+        VmManager.StatusChanged += _OnStatusChanged;
+        Snapshots.Changed += _OnSnapshotsChanged;
+
+        _vm = await VmService.Repository.GetAsync(Id);
+        _notFound = _vm is null;
+        await _LoadAsync();
+    }
+
+    private async Task _LoadAsync()
+    {
+        if (_vm is null)
+            return;
+
+        try
+        {
+            _snapshots = await Snapshots.ListAsync(_vm);
+        }
+        catch (Exception ex) when (ex is QemuImgException or QmpException or InvalidOperationException or IOException)
+        {
+            _snapshots = [];
+            _error = $"Couldn't read the snapshots: {ex.Message}";
+        }
+    }
+
+    /// <summary>A VM that is starting, stopping or crashed is in no state to be captured.</summary>
+    private static bool _CanSnapshot(VmRuntimeInfo info) =>
+        info.Status is VmStatus.Stopped or VmStatus.Running or VmStatus.Paused or VmStatus.Suspended;
+
+    private bool _MemorySupported => SnapshotService.SupportsMemorySnapshots(
+        QemuEnvironment.Installation?.FindBinary(_vm!.Architecture)?.BestAccelerator ?? "tcg");
+
+    private string _KindExplanation(VmRuntimeInfo info) => info.Status switch
+    {
+        VmStatus.Stopped => "The VM is off, so a snapshot saves its disks. Restoring one later boots the VM from that point.",
+        _ when _MemorySupported => "A snapshot of the running VM saves its disks and memory. Restoring it brings the VM back exactly as it was, programs included.",
+        _ => "A snapshot of the running VM saves its disks only: QEMU can't save the memory of a VM running under WHPX. Restoring it is like booting after a power cut at that moment, so stop the VM first for a clean snapshot.",
+    };
+
+    private string _RestoreExplanation()
+    {
+        if (_snapshotToRestore is not { } snapshot || _vm is null)
+            return "";
+
+        var running = VmManager.IsActive(_vm.Id);
+        if (snapshot.HasMemory)
+            return $"{_vm.Name} goes back to how it was when the snapshot was taken, including its open programs{(running ? "" : ", and starts")}. Changes since then are lost.";
+
+        return running
+            ? $"{_vm.Name} is turned off immediately (like pulling the plug), then its disks go back to the snapshot. Changes since then are lost."
+            : $"{_vm.Name}'s disks go back to the snapshot. Changes since then are lost.";
+    }
+
+    private void _OpenCreate()
+    {
+        _newName = $"Snapshot {DateTime.Now:yyyy-MM-dd HH.mm}";
+        _nameError = null;
+        _creating = true;
+    }
+
+    private async Task _CreateAsync()
+    {
+        _nameError = SnapshotService.ValidateName(_newName, _snapshots ?? []);
+        if (_nameError is not null)
+            return;
+
+        _creating = false;
+        await _RunAsync(async () =>
+        {
+            var kind = await Snapshots.CreateAsync(_vm!, _newName);
+            Snackbar.Add(kind == SnapshotKind.WithMemory ? $"Saved \"{_newName.Trim()}\" with the VM's memory." : $"Saved \"{_newName.Trim()}\" (disks only).", Severity.Success);
+        });
+    }
+
+    private async Task _RestoreAsync()
+    {
+        if (_snapshotToRestore is not { } snapshot)
+            return;
+
+        _snapshotToRestore = null;
+        await _RunAsync(async () =>
+        {
+            // The dialog already explained that a disk-only restore turns a running VM off.
+            await Snapshots.RestoreAsync(_vm!, snapshot, stopIfNeeded: true);
+            Snackbar.Add($"Restored \"{snapshot.Name}\".", Severity.Success);
+        });
+    }
+
+    private async Task _DeleteAsync()
+    {
+        if (_snapshotToDelete is not { } snapshot)
+            return;
+
+        _snapshotToDelete = null;
+        await _RunAsync(async () =>
+        {
+            await Snapshots.DeleteAsync(_vm!, snapshot.Name);
+            Snackbar.Add($"Deleted \"{snapshot.Name}\".", Severity.Success);
+        });
+    }
+
+    private async Task _RunAsync(Func<Task> operation)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await operation();
+        }
+        catch (Exception ex) when (ex is QemuImgException or QmpException or InvalidOperationException or IOException
+                                       or VmStartException or QemuConfigurationException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+            await _LoadAsync();
+        }
+    }
+
+    private static string _Size(long bytes) => bytes >= 1 << 30 ? $"{bytes / (double)(1 << 30):0.#} GiB" : $"{bytes / (double)(1 << 20):0} MiB";
+
+    private void _OnStatusChanged(Guid id)
+    {
+        if (id == Id && !_busy)
+            InvokeAsync(async () =>
+            {
+                await _LoadAsync();
+                StateHasChanged();
+            });
+        else if (id == Id)
+            InvokeAsync(StateHasChanged);
+    }
+
+    private void _OnSnapshotsChanged(Guid id)
+    {
+        if (id == Id && !_busy)
+            InvokeAsync(async () =>
+            {
+                await _LoadAsync();
+                StateHasChanged();
+            });
+    }
+
+    public void Dispose()
+    {
+        VmManager.StatusChanged -= _OnStatusChanged;
+        Snapshots.Changed -= _OnSnapshotsChanged;
+    }
+}

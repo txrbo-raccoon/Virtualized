@@ -1,0 +1,20 @@
+<!-- Obfuscar rules for Virtualized.dll, spliced into the generated config by ObfuscateAssembly (Virtualized.csproj).
+     Everything is renamed except what is looked up by name at runtime. Property names are kept for the whole
+     assembly (RenameProperties=false): System.Text.Json (vm.json, state.json, settings.json) and Blazor's
+     [Parameter]/[Inject] bind properties by name. -->
+
+<!-- Enum names are serialized (JsonStringEnumConverter), shown in the UI and passed to QEMU (hostfwd=tcp:...). -->
+<SkipType name="Virtualized.Vms.GuestOs" skipFields="true" />
+<SkipType name="Virtualized.Vms.FirmwareType" skipFields="true" />
+<SkipType name="Virtualized.Vms.PortProtocol" skipFields="true" />
+<SkipType name="Virtualized.Vms.VmStatus" skipFields="true" />
+<SkipType name="Virtualized.Vms.SnapshotKind" skipFields="true" />
+<SkipType name="Virtualized.Qemu.SecureBootSupport" skipFields="true" />
+<SkipType name="Virtualized.Shared.ConsoleScale" skipFields="true" />
+
+<!-- Called from vm-console.js by name through DotNetObjectReference.invokeMethodAsync. -->
+<SkipMethod type="Virtualized.Shared.VmConsole" name="On*" />
+
+<!-- Obfuscar drops parameter names; positional records (VmRuntimeState) are deserialized through their
+     constructor, whose parameters System.Text.Json matches to the JSON by name. -->
+<SkipMethod type="*" name=".ctor" />
