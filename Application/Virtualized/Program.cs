@@ -2,6 +2,7 @@
 using Virtualized;
 using Virtualized.Qemu;
 using Virtualized.Settings;
+using Virtualized.Updates;
 using Virtualized.Vms;
 using Microsoft.Extensions.DependencyInjection;
 using Photino.Blazor;
@@ -23,6 +24,7 @@ internal class Program
         appBuilder.Services.AddSingleton<VmManager>();
         appBuilder.Services.AddSingleton<VmService>();
         appBuilder.Services.AddSingleton<SnapshotService>();
+        appBuilder.Services.AddSingleton<UpdateService>();
 
         var app = appBuilder.Build();
 

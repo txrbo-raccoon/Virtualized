@@ -3,7 +3,12 @@
 ; Non-commercial use only.
 
 #define MyAppName "Virtualized"
-#define MyAppVersion "1.0"
+; build-installer.ps1 passes the version from Virtualized.csproj (/DMyAppVersion=...); this is only the fallback.
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
+; Paths are relative to this script, so it builds from any checkout.
+#define PublishDir SourcePath + "..\Virtualized\bin\Release\net11.0\win-x64\publish"
 #define MyAppPublisher "txrbo.raccoon"
 #define MyAppURL "https://projects.txrbostuff.es/virtualized"
 #define MyAppExeName "Virtualized.exe"
@@ -32,12 +37,13 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Uncomment the following line to use a 64-bit installer.
 ;SetupArchitecture=x64
 DisableProgramGroupPage=yes
-LicenseFile=D:\Projects\RiderProjects\SQemu\LICENCE.txt
+LicenseFile={#SourcePath}..\..\LICENCE.txt
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputBaseFilename=virtualized_setup_w64_1-0
-SetupIconFile=D:\Projects\RiderProjects\SQemu\Application\Virtualized\appicon.ico
+; The in-app updater looks for "virtualized_setup_w64_*.exe" in the GitHub release.
+OutputBaseFilename=virtualized_setup_w64_{#StringChange(MyAppVersion, ".", "-")}
+SetupIconFile={#SourcePath}..\Virtualized\appicon.ico
 SolidCompression=yes
 WizardStyle=classic
 
@@ -45,10 +51,10 @@ WizardStyle=classic
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "D:\Projects\RiderProjects\SQemu\Application\Virtualized\bin\Release\net11.0\win-x64\publish\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\Projects\RiderProjects\SQemu\Application\Virtualized\bin\Release\net11.0\win-x64\publish\appicon.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\Projects\RiderProjects\SQemu\Application\Virtualized\bin\Release\net11.0\win-x64\publish\Photino.Native.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\Projects\RiderProjects\SQemu\Application\Virtualized\bin\Release\net11.0\win-x64\publish\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PublishDir}\appicon.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PublishDir}\Photino.Native.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PublishDir}\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files.
 
 [Icons]
@@ -57,4 +63,12 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#DoubleAmp(MyAppName)}}"; Flags: nowait postinstall skipifsilent
+; The in-app updater runs this setup with /SILENT /RELAUNCH=1 and has closed itself; open it again, not elevated.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:relaunch|0}') = '1');
+end;
 

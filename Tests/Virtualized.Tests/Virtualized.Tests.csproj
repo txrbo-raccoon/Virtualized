@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Virtualized\Virtualized.csproj" />
+    <ProjectReference Include="..\..\Application\Virtualized\Virtualized.csproj" />
   </ItemGroup>
 
 </Project>

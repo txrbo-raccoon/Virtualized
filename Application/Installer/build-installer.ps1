@@ -1,6 +1,6 @@
 # Builds the Windows x64 installer and its checksum:
 #   1. publishes Virtualized like Rider's "Virtualized Windows x64" profile (Release, self-contained, single file)
-#   2. compiles setup.iss with Inno Setup
+#   2. compiles setup.iss with Inno Setup, passing it the version from Virtualized.csproj
 #   3. writes Output\<installer>.exe.sha256 ("<hash>  <file name>", as sha256sum prints it), to publish next to the download
 # Usage: powershell -ExecutionPolicy Bypass -File build-installer.ps1 [-SkipPublish] [-Iscc <path to ISCC.exe>]
 
@@ -34,13 +34,14 @@ if (-not $SkipPublish) {
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
 }
 
-& $Iscc $script
-if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)." }
+# The version is set only in Virtualized.csproj; the installer's name carries it (1.2.0 -> ..._1-2-0) and the
+# in-app updater looks for "virtualized_setup_w64_*.exe" and its .sha256 in the GitHub release.
+$version = ([xml](Get-Content $project)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+if (-not $version) { throw 'Version not found in Virtualized.csproj.' }
+$baseName = "virtualized_setup_w64_$($version -replace '\.', '-')"
 
-# The installer's name comes from setup.iss, so it stays right when the version changes there.
-$baseName = Select-String -Path $script -Pattern '^\s*OutputBaseFilename\s*=\s*(.+?)\s*$' |
-    Select-Object -First 1 | ForEach-Object { $_.Matches[0].Groups[1].Value }
-if (-not $baseName) { throw 'OutputBaseFilename not found in setup.iss.' }
+& $Iscc "/DMyAppVersion=$version" "/F$baseName" $script
+if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)." }
 
 $installer = Join-Path $installerDir "Output\$baseName.exe"
 $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
@@ -52,3 +53,5 @@ Write-Host ''
 Write-Host "Installer: $installer"
 Write-Host "SHA-256:   $hash"
 Write-Host "Written to $checksumFile"
+Write-Host ''
+Write-Host "To publish: create the GitHub release v$version and upload both files to it."

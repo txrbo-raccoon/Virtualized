@@ -6,6 +6,9 @@ public sealed record AppSettings
 {
     /// <summary>Folder holding the qemu-system-* binaries; null means detect automatically.</summary>
     public string? QemuDirectory { get; init; }
+
+    /// <summary>Look for a new release on GitHub each time the app starts.</summary>
+    public bool CheckForUpdates { get; init; } = true;
 }
 
 public sealed class SettingsStore

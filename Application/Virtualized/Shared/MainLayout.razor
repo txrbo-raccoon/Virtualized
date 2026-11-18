@@ -1,6 +1,13 @@
 ﻿@inherits LayoutComponentBase
+@implements IDisposable
+@using Photino.Blazor
+@using Virtualized.Updates
 @inject Virtualized.Qemu.QemuEnvironment QemuEnvironment
 @inject Virtualized.Vms.VmManager VmManager
+@inject Virtualized.Settings.SettingsStore Settings
+@inject UpdateService Updates
+@inject ISnackbarService Snackbar
+@inject PhotinoBlazorApp App
 @inject NavigationManager Nav
 
 <CbThemeProvider @bind-Theme="_theme" Mode="_mode" ModeChanged="_OnModeChanged">
@@ -24,6 +31,22 @@
         </ChildContent>
     </CerberusWindow>
 
+    <CbDialog Visible="@(Updates.Available is not null && !Updates.IsDismissed)" VisibleChanged="visible => { if (!visible) Updates.Dismiss(); }"
+              Title="@($"Virtualized {Updates.Available?.Version} is available")" MaxWidth="MaxWidth.Small" FullWidth="true">
+        <ChildContent>
+            <CbText Typo="Typo.Body2">
+                You have version @UpdateService.CurrentVersion. Virtualized will close, install the update and open again.
+                Running VMs keep running.
+            </CbText>
+        </ChildContent>
+        <Actions>
+            @* The browser, not the app's webview, opens the release page. *@
+            <CbButton Variant="Variant.Text" OnClick="@(() => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Updates.Available!.ReleaseUrl) { UseShellExecute = true }))">What's new</CbButton>
+            <CbButton Variant="Variant.Text" Disabled="Updates.IsInstalling" OnClick="Updates.Dismiss">Later</CbButton>
+            <CbButton Variant="Variant.Filled" StartIcon="download" Loading="Updates.IsInstalling" OnClick="_InstallUpdateAsync">Update</CbButton>
+        </Actions>
+    </CbDialog>
+
     <CbSnackbarProvider Position="Origin.BottomRight" />
 </CbThemeProvider>
 
@@ -34,13 +57,47 @@
 
     protected override async Task OnInitializedAsync()
     {
+        Updates.Changed += _OnUpdatesChanged;
+
         if (QemuEnvironment.Detection is null)
         {
             await QemuEnvironment.RefreshAsync();
             // VMs left running when the app last closed are picked up again.
             await VmManager.ReattachAllAsync();
+
+            if (UpdateService.IsSupported && Settings.Current.CheckForUpdates)
+                _ = _CheckForUpdatesAsync();
         }
     }
+
+    private async Task _CheckForUpdatesAsync()
+    {
+        try
+        {
+            await Updates.CheckAsync();
+        }
+        catch (Exception)
+        {
+            // Offline or GitHub unreachable: the startup check stays silent; Settings has a manual check that reports errors.
+        }
+    }
+
+    private async Task _InstallUpdateAsync()
+    {
+        try
+        {
+            await Updates.InstallAsync(Updates.Available!);
+            App.MainWindow.Close();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"The update couldn't be installed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void _OnUpdatesChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Updates.Changed -= _OnUpdatesChanged;
 
     private void _OnModeChanged(ThemeMode mode) => _mode = mode;
 

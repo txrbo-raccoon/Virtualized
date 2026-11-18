@@ -2,9 +2,12 @@
 @using Photino.Blazor
 @using Virtualized.Qemu
 @using Virtualized.Settings
+@using Virtualized.Updates
 @implements IDisposable
 @inject QemuEnvironment QemuEnvironment
 @inject SettingsStore SettingsStore
+@inject UpdateService Updates
+@inject ISnackbarService Snackbar
 @inject PhotinoBlazorApp App
 
 <PageTitle>Settings</PageTitle>
@@ -72,6 +75,26 @@
             </CbStack>
         </CbCardContent>
     </CbCard>
+
+    @if (UpdateService.IsSupported)
+    {
+        <CbCard Outlined="true">
+            <CbCardHeader Title="Updates" Subtitle="@($"Virtualized {UpdateService.CurrentVersion}")" />
+            <CbCardContent>
+                <CbStack Spacing="2">
+                    <CbSwitch Value="SettingsStore.Current.CheckForUpdates" ValueChanged="(bool check) => _SetCheckForUpdatesAsync(check)"
+                              Label="Check for updates on startup" HelperText="New versions are downloaded from GitHub Releases." />
+                    <CbStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                        <CbButton Variant="Variant.Outlined" StartIcon="update" Loading="Updates.IsChecking" OnClick="_CheckForUpdatesAsync">Check now</CbButton>
+                        @if (Updates.Available is { } update)
+                        {
+                            <CbText Typo="Typo.Body2">Version @update.Version is available.</CbText>
+                        }
+                    </CbStack>
+                </CbStack>
+            </CbCardContent>
+        </CbCard>
+    }
 
     @if (Installation is { } installation)
     {
@@ -193,6 +216,7 @@
     {
         _qemuDirectory = SettingsStore.Current.QemuDirectory;
         QemuEnvironment.Changed += _OnEnvironmentChanged;
+        Updates.Changed += _OnEnvironmentChanged;
     }
 
     private async Task _BrowseAsync()
@@ -207,6 +231,22 @@
         var directory = string.IsNullOrWhiteSpace(_qemuDirectory) ? null : _qemuDirectory.Trim();
         await SettingsStore.SaveAsync(SettingsStore.Current with { QemuDirectory = directory });
         await QemuEnvironment.RefreshAsync();
+    }
+
+    private Task _SetCheckForUpdatesAsync(bool check) => SettingsStore.SaveAsync(SettingsStore.Current with { CheckForUpdates = check });
+
+    private async Task _CheckForUpdatesAsync()
+    {
+        try
+        {
+            // A newer version opens the update dialog from MainLayout.
+            if (await Updates.CheckAsync() is null)
+                Snackbar.Add($"Virtualized {UpdateService.CurrentVersion} is the latest version.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Couldn't check for updates: {ex.Message}", Severity.Error);
+        }
     }
 
     private static string _AccelerationHint(QemuSystemBinary binary)
@@ -241,5 +281,9 @@
 
     private void _OnEnvironmentChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => QemuEnvironment.Changed -= _OnEnvironmentChanged;
+    public void Dispose()
+    {
+        QemuEnvironment.Changed -= _OnEnvironmentChanged;
+        Updates.Changed -= _OnEnvironmentChanged;
+    }
 }
