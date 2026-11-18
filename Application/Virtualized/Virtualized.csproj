@@ -24,7 +24,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\Libraries\Virtualized.Assets\Virtualized.Assets.csproj" />
-        <ProjectReference Include="..\..\Libraries\Virtualized.Assets.Packer\Virtualized.Assets.Packer.csproj" ReferenceOutputAssembly="false" Private="false"
+        <ProjectReference Include="../../Libraries/Virtualized.Assets.Packer/Virtualized.Assets.Packer.csproj" ReferenceOutputAssembly="false" Private="false"
                           GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishReadyToRun" />
     </ItemGroup>
 
@@ -47,26 +47,27 @@
 
     <Target Name="_SetWebRootPaths">
         <PropertyGroup>
-            <WebRootArchive>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)wwwroot.vpak</WebRootArchive>
-            <WebRootKeyFile>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)wwwroot.vpak.key</WebRootKeyFile>
-            <WebRootKeySource>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)WebRootKey.g.cs</WebRootKeySource>
+            <WebRootArchive>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)wwwroot.vpak</WebRootArchive>
+            <WebRootKeyFile>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)wwwroot.vpak.key</WebRootKeyFile>
+            <WebRootKeySource>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)WebRootKey.g.cs</WebRootKeySource>
         </PropertyGroup>
     </Target>
 
     <Target Name="_BuildAssetPacker">
-        <MSBuild Projects="..\..\Libraries\Virtualized.Assets.Packer\Virtualized.Assets.Packer.csproj" Targets="Build" Properties="Configuration=$(Configuration)"
+        <MSBuild Projects="../../Libraries/Virtualized.Assets.Packer/Virtualized.Assets.Packer.csproj" Targets="Build" Properties="Configuration=$(Configuration)"
                  RemoveProperties="RuntimeIdentifier;SelfContained;PublishReadyToRun;TargetFramework">
             <Output TaskParameter="TargetOutputs" PropertyName="AssetPackerPath" />
         </MSBuild>
     </Target>
 
     <Target Name="_EnsureWebRootKey" DependsOnTargets="_SetWebRootPaths;_BuildAssetPacker" Condition="!Exists('$(WebRootKeyFile)')">
+        <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(WebRootKeyFile)'))" />
         <Exec Command="dotnet &quot;$(AssetPackerPath)&quot; --generate-key &quot;$(WebRootKeyFile)&quot;" />
     </Target>
 
     <Target Name="PackWebRoot" BeforeTargets="BeforeBuild" DependsOnTargets="_SetWebRootPaths;_BuildAssetPacker;_EnsureWebRootKey"
             Inputs="@(WebRootFile);$(WebRootKeyFile)" Outputs="$(WebRootArchive)">
-        <Exec Command="dotnet &quot;$(AssetPackerPath)&quot; -q -k &quot;$(WebRootKeyFile)&quot; &quot;$(MSBuildProjectDirectory)\wwwroot&quot; &quot;$(WebRootArchive)&quot;" ConsoleToMSBuild="true" />
+        <Exec Command="dotnet &quot;$(AssetPackerPath)&quot; -q -k &quot;$(WebRootKeyFile)&quot; &quot;$(MSBuildProjectDirectory)/wwwroot&quot; &quot;$(WebRootArchive)&quot;" ConsoleToMSBuild="true" />
     </Target>
 
     <!-- Embeds the archive and compiles its key into WebRootKey (read by ArchiveFileProvider). -->
@@ -100,9 +101,9 @@ internal static class WebRootKey
 
     <Target Name="_SetObfuscationPaths">
         <PropertyGroup>
-            <ObfuscationDirectory>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)obfuscated</ObfuscationDirectory>
-            <ObfuscationConfig>$(ObfuscationDirectory)\obfuscar.xml</ObfuscationConfig>
-            <ObfuscatedAssembly>$(ObfuscationDirectory)\$(TargetFileName)</ObfuscatedAssembly>
+            <ObfuscationDirectory>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)obfuscated</ObfuscationDirectory>
+            <ObfuscationConfig>$(ObfuscationDirectory)/obfuscar.xml</ObfuscationConfig>
+            <ObfuscatedAssembly>$(ObfuscationDirectory)/$(TargetFileName)</ObfuscatedAssembly>
         </PropertyGroup>
         <ItemGroup>
             <_ObfuscatedLibrary Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)%(Extension)' == 'Virtualized.Assets.dll'" />
@@ -130,8 +131,8 @@ internal static class WebRootKey
         </ItemGroup>
         <MakeDir Directories="$(ObfuscationDirectory)" />
         <WriteLinesToFile File="$(ObfuscationConfig)" Lines="@(_ObfuscationLine)" Overwrite="true" />
-        <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)\..\.." StandardOutputImportance="low" />
-        <Exec Command="dotnet tool run obfuscar.console &quot;$(ObfuscationConfig)&quot;" WorkingDirectory="$(MSBuildProjectDirectory)\..\.."
+        <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)/../.." StandardOutputImportance="low" />
+        <Exec Command="dotnet tool run obfuscar.console &quot;$(ObfuscationConfig)&quot;" WorkingDirectory="$(MSBuildProjectDirectory)/../.."
               StandardOutputImportance="low" />
         <Message Text="Obfuscated $(TargetFileName) and @(_ObfuscatedLibrary->'%(Filename)%(Extension)') into $(ObfuscationDirectory)" Importance="high" />
     </Target>
@@ -141,8 +142,8 @@ internal static class WebRootKey
             <IntermediateAssembly Remove="@(IntermediateAssembly)" />
             <IntermediateAssembly Include="$(ObfuscatedAssembly)" />
             <ReferenceCopyLocalPaths Remove="@(_ObfuscatedLibrary);@(_ObfuscatedLibrarySymbols)" />
-            <ReferenceCopyLocalPaths Include="@(_ObfuscatedLibrary->'$(ObfuscationDirectory)\%(Filename)%(Extension)')" />
-            <FileWrites Include="$(ObfuscationDirectory)\**" />
+            <ReferenceCopyLocalPaths Include="@(_ObfuscatedLibrary->'$(ObfuscationDirectory)/%(Filename)%(Extension)')" />
+            <FileWrites Include="$(ObfuscationDirectory)/**" />
         </ItemGroup>
     </Target>
 </Project>
