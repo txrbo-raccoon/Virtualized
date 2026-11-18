@@ -32,7 +32,8 @@ internal static class ProcessRunner
         catch (OperationCanceledException)
         {
             process.Kill(entireProcessTree: true);
-            throw new TimeoutException($"{Path.GetFileName(fileName)} did not finish within {timeout.TotalSeconds:0}s.");
+            throw new TimeoutException(
+                $"{Path.GetFileName(fileName)} {string.Join(' ', startInfo.ArgumentList)} did not finish within {timeout.TotalSeconds:0}s.");
         }
 
         return new ProcessResult(process.ExitCode, await stdOut, await stdErr);

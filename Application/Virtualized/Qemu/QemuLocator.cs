@@ -11,7 +11,11 @@ public sealed partial class QemuLocator
     /// <summary>This computer's architecture in QEMU's naming.</summary>
     public static string HostArchitecture => RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "aarch64" : "x86_64";
 
-    private static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// Generous because the first run of a fresh install is slow on Windows: the antivirus scans
+    /// qemu-system and every DLL it loads before letting it start.
+    /// </summary>
+    private static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Finds a QEMU installation. A configured directory is the only place looked at, so a wrong
